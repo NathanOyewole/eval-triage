@@ -71,21 +71,20 @@ def main(argv=None):
     ap.add_argument("--top", type=int, default=20, help="Show top N samples (default 20)")
     ap.add_argument("--min-score", type=float, default=0.0, help="Minimum suspicion score to include")
     ap.add_argument("--only-unparsed", action="store_true", help="Only show samples where score_parsed=False")
-    ap.add_argument("--out", type=str, default=None, help="Write JSON output to this file")
+    ap.add_argument("--sample-below", type=int, default=0, metavar="N", help="Randomly include N below-threshold samples (catch monitor misses)")
+    ap.add_argument("--format", choices=["json", "csv", "markdown"], default="json", help="Export format for --out (default json)")
+    ap.add_argument("--out", type=str, default=None, help="Write export to this file")
     args = ap.parse_args(argv)
 
     rows = []
+    below = []
     for f, s, task in collect_samples(args.path):
         res = extract_monitor(s)
         if res is None:
             continue
         score, parsed, reason, snippet, _ = res
-        if score < args.min_score:
-            continue
-        if args.only_unparsed and parsed:
-            continue
         sid = getattr(s, "id", None)
-        rows.append({
+        entry = {
             "file": f,
             "sample_id": sid,
             "task": task,
@@ -93,7 +92,23 @@ def main(argv=None):
             "score_parsed": parsed,
             "snippet": snippet,
             "reason": (reason or "")[:120],
-        })
+            "below_threshold": False,
+        }
+        if score < args.min_score:
+            below.append(entry)
+            continue
+        if args.only_unparsed and parsed:
+            continue
+        rows.append(entry)
+
+    # randomly include N below-threshold samples to catch monitor misses
+    if args.sample_below and below:
+        import random
+        random.seed(42)
+        chosen = random.sample(below, min(args.sample_below, len(below)))
+        for c in chosen:
+            c["below_threshold"] = True
+            rows.append(c)
 
     rows.sort(key=lambda r: r["score"], reverse=True)
     rows = rows[: args.top]
@@ -109,15 +124,35 @@ def main(argv=None):
         table.add_row(
             f"{r['score']:.3f}",
             "✓" if r["score_parsed"] else "✗",
-            str(r["sample_id"]),
+            str(r["sample_id"]) + (" *" if r.get("below_threshold") else ""),
             str(r["task"] or ""),
             r["snippet"][:60],
         )
     console.print(table)
 
     if args.out:
-        Path(args.out).write_text(json.dumps(rows, indent=2, default=str))
-        console.print(f"Wrote {len(rows)} rows to {args.out}")
+        if args.format == "json":
+            Path(args.out).write_text(json.dumps(rows, indent=2, default=str))
+        elif args.format == "csv":
+            import csv
+            with open(args.out, "w", newline="") as fh:
+                w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()) if rows else ["file","sample_id","task","score","score_parsed","snippet","reason"])
+                w.writeheader()
+                for r in rows:
+                    w.writerow(r)
+        elif args.format == "markdown":
+            lines = ["# eval-triage report", "", f"Samples: {len(rows)}", "", "| Score | Parsed | Sample | Task | Snippet |", "|---|---|---|---|---|"]
+            for r in rows:
+                lines.append(f"| {r['score']:.3f} | {'✓' if r['score_parsed'] else '✗'} | {r['sample_id']} | {r['task']} | {r['snippet']} |")
+            lines.append("")
+            lines.append("## Details")
+            for r in rows:
+                lines.append(f"### {r['sample_id']} (score {r['score']:.3f})")
+                lines.append(f"- Parsed: {r['score_parsed']}")
+                lines.append(f"- Reason: {r['reason']}")
+                lines.append("")
+            Path(args.out).write_text("\n".join(lines))
+        console.print(f"Wrote {len(rows)} rows to {args.out} ({args.format})")
 
 
 if __name__ == "__main__":
