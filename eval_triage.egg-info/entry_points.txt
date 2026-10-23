@@ -1,0 +1,2 @@
+[console_scripts]
+eval-triage = eval_triage.cli:main

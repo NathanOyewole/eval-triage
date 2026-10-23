@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: eval-triage
+Version: 0.1.0
+Summary: Triage Inspect AI .eval logs by monitor suspicion score.
+Requires-Python: >=3.11
+Requires-Dist: inspect-ai>=0.3.252
+Requires-Dist: rich>=13.7.0
